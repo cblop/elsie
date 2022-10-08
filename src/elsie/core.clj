@@ -6,11 +6,16 @@
 (def record-sequence
   (atom [[]]))
 
+(def play-sequence
+  (atom [[]]))
+
+(def delete-mode? (atom false))
+
 (def sinks
   (let [sink-devices (midi/midi-sinks)
         mf-3d (midi/midi-find-device sink-devices "M3D")
         mf-twister (midi/midi-find-device sink-devices "Twister")]
-    {:mf-3d #p (midi/midi-out mf-3d)
+    {:mf-3d (midi/midi-out mf-3d)
      :mf-twister (midi/midi-out mf-twister)}))
 
 (def mf-out (:mf-3d sinks))
@@ -26,19 +31,21 @@
 
 (def bank (atom 0))
 
+(def banks [:play :record :sequence :jam])
+
 (def note-banks (atom {:record 0
-                      :sequence 0}))
+                       :sequence 0}))
 
 (def colour-order
-  [:red
-   :orange
-   :yellow
+  [:purple
    :green
+   :orange
    :cyan
+   :red
+   :yellow
    :blue
-   :purple
-   :forest
-   :pink])
+   :pink
+   :forest])
 
 (def colours
   {:red 13
@@ -77,7 +84,10 @@
 (def buttons
   {:record {:sequence (set (range 52 68))
             :inc-bank 30
-            :dec-bank 27}})
+            :dec-bank 27}
+   :sequence {:sequence (set (range 68 84))
+              :inc-bank 36
+              :dec-bank 33}})
 
 (defn flash-buttons
   [{:keys [notes colour duration]}]
@@ -88,13 +98,13 @@
   [{:keys [notes colour]}]
   (doseq [note notes]
     (midi/midi-note-on mf-out (cond-> note
-                                (keyword? note) (ot/note note)) (get colours colour) 2)))
+                                (keyword? note) (ot/note)) (get colours colour) 2)))
 
 (defn buttons-off
   [notes]
   (doseq [note notes]
     (midi/midi-note-off mf-out (cond-> note
-                                 (keyword? note) (ot/note note)) 2)))
+                                 (keyword? note) (ot/note)) 2)))
 
 (defn light-clock
   [beat]
@@ -116,25 +126,30 @@
     (reset! bank 0)
     (midi/midi-note-on mf-out (ot/note (nth bank-numbers bank-number)) 127 3)))
 
-(midi/midi-note-on mf-out (ot/note :c2) (:green colours) 2)
-(midi/midi-note-off mf-out (ot/note :c2) 2)
-
 (defn play
   []
   (change-bank 0)
   (ot/metro-bpm metro bpm)
   (ot/metro-start metro 0)
+  (buttons-off (range 0 128))
   (light-clock (metro)))
 
 (defn stop
   []
   (ot/stop))
 
+;; TODO remove?
+(defn delete-mode
+  []
+  (swap! delete-mode? not))
+
 (def commands
   {:stop {:notes #{25 31 37 43}
           :command stop}
    :play {:notes #{22 28 34 40}
-          :command play}})
+          :command play}
+   :delete-mode {:notes #{20 26 32 38}
+                 :command delete-mode}})
 
 (defn abs
   "(abs n) is the absolute value of n"
@@ -145,40 +160,100 @@
    (neg? n) (- n)
    :else n))
 
+(defn current-seq
+  []
+  (nth banks @bank))
+
+(def start-buttons
+  {:record 64
+   :sequence 80
+   :play 48
+   :jam 96})
+
 (defn position->button
   [pos]
-  (abs (-
-        (- 64)
-        (mod (+ 64 pos) 4)
-        (- (- pos (rem pos 4))))))
+  (let [start (start-buttons (current-seq))]
+    (abs (-
+          (- start)
+          (mod (+ start pos) 4)
+          (- (- pos (rem pos 4)))
+          (+ (* (get @note-banks (nth banks @bank)) 16))))))
 
 (defn button->position
   [note]
-  (+
-   (- 64 note)
-   (mod note 4)
-   (rem note 4)))
+  (let [start (start-buttons (current-seq))]
+    (+
+     (- start note)
+     (mod note 4)
+     (rem note 4)
+     ;; TODO make dependend on current bank
+     (* (get @note-banks (nth banks @bank)) 16))))
+
+(defn redraw-buttons
+  []
+  (buttons-off (range 52 68))
+  (let [current-sequence @record-sequence]
+    (doseq [[i start finish] (map conj current-sequence (range (count current-sequence)))]
+      (buttons-on {:notes (map position->button (range start (inc finish)))
+                   :colour (nth colour-order (mod i (count colour-order)))}))))
 
 (defn inc-note-bank
   [type]
-  (swap! note-banks #(update % type inc)))
+  (swap! note-banks #(update % type inc))
+  (redraw-buttons))
 
 (defn dec-note-bank
   [type]
-  (swap! note-banks #(update % type inc)))
+  (swap! note-banks #(update % type (fn [n]
+                                      (cond-> n
+                                        (> n 0) (dec)))))
+  (redraw-buttons))
 
-(defn add-record-phrase
+
+;; TODO what about sorting?
+(defn append-or-delete-phrase
+  [note]
+  (let [sequence (case (nth banks @bank)
+                   :record record-sequence
+                   :sequence play-sequence)
+        current-sequence @sequence
+        phrase (-> current-sequence (last) (conj note) (sort))]
+    (if (some #{phrase} current-sequence)
+      (do
+        (reset! sequence (vec (butlast (remove #{phrase} current-sequence))))
+        (redraw-buttons))
+      (swap! sequence (fn [s]
+                               (assoc s (dec (count current-sequence)) phrase))))))
+
+(defn add-or-remove-record-phrase
   [note]
   (let [current-sequence @record-sequence
         last-count (count (last current-sequence))]
+    #p note
     (if
         (>= last-count 2) (swap! record-sequence conj [note])
-        (do (swap! record-sequence (fn [s] (update s (dec (count current-sequence)) #(-> % (conj note) (sort)))))
-            (let [new-sequence @record-sequence
+        (do
+          (append-or-delete-phrase note)
+          (let [new-sequence @record-sequence
                   [start finish] (last new-sequence)]
-              (buttons-on {:notes #p (map position->button (range start (inc finish)))
-                           :colour #p (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
-    (prn @record-sequence)))
+              (buttons-on {:notes (map position->button (range start (inc finish)))
+                           :colour (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
+    (println @record-sequence)))
+
+
+(defn add-or-remove-play-phrase
+  [note]
+  (let [current-sequence @play-sequence
+        last-count (count (last current-sequence))]
+    (if
+        (>= last-count 3) (swap! play-sequence conj [note])
+        (do
+          (append-or-delete-phrase note)
+          (let [new-sequence @play-sequence
+                  [start finish] (last new-sequence)]
+              (buttons-on {:notes (map position->button (range start (inc finish)))
+                           :colour (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
+    (println @play-sequence)))
 
 
 (ot/on-event [:midi :note-on]
@@ -196,25 +271,36 @@
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
-               (when ((get-in buttons [:record :sequence]) note) (add-record-phrase
-                                                                  (+ (button->position note) (* (:record @note-banks) 16)))))
+               (when ((get-in buttons [:record :sequence]) note) (add-or-remove-record-phrase
+                                                                  (button->position note))))
              ::sequence-record-handler)
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
-               (when (<= 0 note 3) (reset! bank note)))
+               (when ((get-in buttons [:sequence :sequence]) note) (add-or-remove-play-phrase
+                                                                (button->position note))))
+             ::sequence-play-handler)
+
+(ot/on-event [:midi :note-on]
+             (fn [{:keys [note]}]
+               (when (<= 0 note 3)
+                 (reset! bank note)))
              ::bank-change-handler)
 
 (defn init []
   (ot/stop)
   (buttons-off (range 0 128))
+  (change-bank 0)
   (reset! record-sequence [[]])
+  (reset! note-banks {:record 0
+                      :sequence 0})
   (ot/metro-bpm metro bpm)
   (ot/metro-start metro 0))
 
-;; (init)
+(init)
 
-;; (ot/event-debug-off)
+;; (ot/event-debug-on)
+(ot/event-debug-off)
 
 ;; (do
 ;;   (ot/metro-bpm metro bpm)
