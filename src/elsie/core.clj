@@ -191,11 +191,24 @@
 
 (defn redraw-buttons
   []
-  (buttons-off (range 52 68))
-  (let [current-sequence @record-sequence]
-    (doseq [[i start finish] (map conj current-sequence (range (count current-sequence)))]
-      (buttons-on {:notes (map position->button (range start (inc finish)))
-                   :colour (nth colour-order (mod i (count colour-order)))}))))
+  (let [seq-key (nth banks @bank)
+        sequence (case seq-key
+                   :record record-sequence
+                   :sequence play-sequence)
+        current-sequence @sequence]
+    (prn "REDRAW")
+    (case seq-key
+      :record (buttons-off (range 52 68))
+      :sequence (buttons-off (range 68 84)))
+    (doseq [index-seq #p (map #(-> (apply list %1)
+                                (conj %2)) current-sequence (range (count current-sequence)))]
+      (let [i (first index-seq)
+            seq-type? (= seq-key :sequence)
+            start (nth index-seq 1)
+            finish (nth index-seq 2)
+            colour (if seq-type? (nth colour-order (mod (last index-seq) (count colour-order))) (nth colour-order (mod i (count colour-order))))]
+        (buttons-on {:notes #p (map position->button (range start (inc finish)))
+                     :colour colour})))))
 
 (defn inc-note-bank
   [type]
@@ -209,52 +222,66 @@
                                         (> n 0) (dec)))))
   (redraw-buttons))
 
+(def selected-phrase (atom 0))
 
 ;; TODO what about sorting?
 (defn append-or-delete-phrase
   [note]
-  (let [sequence (case (nth banks @bank)
+  (let [seq-key (nth banks @bank)
+        sequence (case seq-key
                    :record record-sequence
                    :sequence play-sequence)
         current-sequence @sequence
-        phrase (-> current-sequence (last) (conj note) (sort))]
+        unsorted-phrase (-> current-sequence (last) (conj note))
+        phrase (cond-> unsorted-phrase
+                 (not= seq-key :sequence) (sort))]
+    ;; TODO sort out play sequence deletion
     (if (some #{phrase} current-sequence)
       (do
         (reset! sequence (vec (butlast (remove #{phrase} current-sequence))))
         (redraw-buttons))
-      (swap! sequence (fn [s]
-                               (assoc s (dec (count current-sequence)) phrase))))))
+      (swap! sequence (fn [s] (assoc s (dec (count current-sequence)) phrase))))))
 
 (defn add-or-remove-record-phrase
   [note]
   (let [current-sequence @record-sequence
         last-count (count (last current-sequence))]
-    #p note
     (if
         (>= last-count 2) (swap! record-sequence conj [note])
         (do
           (append-or-delete-phrase note)
           (let [new-sequence @record-sequence
-                  [start finish] (last new-sequence)]
+                [start finish] (last new-sequence)]
               (buttons-on {:notes (map position->button (range start (inc finish)))
                            :colour (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
     (println @record-sequence)))
 
+(defn sequence-selection
+  []
+  (doseq [i (range (count @record-sequence))]
+    (buttons-on {:notes #{(position->button i)}
+                 :colour (nth colour-order (mod i (count colour-order)))})))
 
 (defn add-or-remove-play-phrase
   [note]
   (let [current-sequence @play-sequence
         last-count (count (last current-sequence))]
-    (if
-        (>= last-count 3) (swap! play-sequence conj [note])
-        (do
-          (append-or-delete-phrase note)
-          (let [new-sequence @play-sequence
-                  [start finish] (last new-sequence)]
-              (buttons-on {:notes (map position->button (range start (inc finish)))
-                           :colour (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
+    (cond
+      (>= last-count 3) (swap! play-sequence conj [note])
+        (= last-count 2) (do
+                           (append-or-delete-phrase note)
+                           (redraw-buttons))
+        (= last-count 1) (do
+                           (append-or-delete-phrase note)
+                           (sequence-selection))
+        :else (append-or-delete-phrase note))
     (println @play-sequence)))
 
+(defn bank-changed
+  [bank]
+  (when (= bank 2)
+    (buttons-off (range 68 84))
+    (redraw-buttons)))
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
@@ -271,20 +298,30 @@
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
-               (when ((get-in buttons [:record :sequence]) note) (add-or-remove-record-phrase
-                                                                  (button->position note))))
+               (cond
+                 (= note (get-in buttons [:sequence :inc-bank])) (inc-note-bank :sequence)
+                 (= note (get-in buttons [:sequence :dec-bank])) (dec-note-bank :sequence)))
+             ::sequence-note-bank-handler)
+
+(ot/on-event [:midi :note-on]
+             (fn [{:keys [note]}]
+               (when ((get-in buttons [:record :sequence]) note)
+                 (add-or-remove-record-phrase
+                  (button->position note))))
              ::sequence-record-handler)
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
-               (when ((get-in buttons [:sequence :sequence]) note) (add-or-remove-play-phrase
-                                                                (button->position note))))
+               (when ((get-in buttons [:sequence :sequence]) note)
+                 (add-or-remove-play-phrase
+                  (button->position note))))
              ::sequence-play-handler)
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
                (when (<= 0 note 3)
-                 (reset! bank note)))
+                 (reset! bank note)
+                 (bank-changed note)))
              ::bank-change-handler)
 
 (defn init []
