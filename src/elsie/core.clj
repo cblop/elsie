@@ -96,7 +96,7 @@
 
 (defn buttons-on
   [{:keys [notes colour]}]
-  (doseq [note notes]
+  (doseq [note #p notes]
     (midi/midi-note-on mf-out (cond-> note
                                 (keyword? note) (ot/note)) (get colours colour) 2)))
 
@@ -189,6 +189,15 @@
      ;; TODO make dependend on current bank
      (* (get @note-banks (nth banks @bank)) 16))))
 
+
+(defn button->sequence
+  [note]
+  (let [start (start-buttons (current-seq))]
+    (+
+     (- start note)
+     (mod note 4)
+     (rem note 4))))
+
 (defn redraw-buttons
   []
   (let [seq-key (nth banks @bank)
@@ -196,18 +205,17 @@
                    :record record-sequence
                    :sequence play-sequence)
         current-sequence @sequence]
-    (prn "REDRAW")
     (case seq-key
       :record (buttons-off (range 52 68))
       :sequence (buttons-off (range 68 84)))
-    (doseq [index-seq #p (map #(-> (apply list %1)
+    (doseq [index-seq (map #(-> (apply list %1)
                                 (conj %2)) current-sequence (range (count current-sequence)))]
       (let [i (first index-seq)
             seq-type? (= seq-key :sequence)
             start (nth index-seq 1)
             finish (nth index-seq 2)
             colour (if seq-type? (nth colour-order (mod (last index-seq) (count colour-order))) (nth colour-order (mod i (count colour-order))))]
-        (buttons-on {:notes #p (map position->button (range start (inc finish)))
+        (buttons-on {:notes (map position->button (range start (inc finish)))
                      :colour colour})))))
 
 (defn inc-note-bank
@@ -258,30 +266,34 @@
 
 (defn sequence-selection
   []
+  (buttons-off (range 68 84))
   (doseq [i (range (count @record-sequence))]
-    (buttons-on {:notes #{(position->button i)}
+    (buttons-on {:notes #{(position->button (+ i (* (get @note-banks (nth banks @bank)) 16)))}
                  :colour (nth colour-order (mod i (count colour-order)))})))
 
 (defn add-or-remove-play-phrase
   [note]
   (let [current-sequence @play-sequence
-        last-count (count (last current-sequence))]
+        last-count (count (last current-sequence))
+        transposed-note (button->position note)]
     (cond
-      (>= last-count 3) (swap! play-sequence conj [note])
+      (>= last-count 3) (swap! play-sequence conj [transposed-note])
         (= last-count 2) (do
-                           (append-or-delete-phrase note)
+                           (append-or-delete-phrase (button->sequence note))
                            (redraw-buttons))
         (= last-count 1) (do
-                           (append-or-delete-phrase note)
+                           (append-or-delete-phrase transposed-note)
                            (sequence-selection))
-        :else (append-or-delete-phrase note))
+        :else (append-or-delete-phrase transposed-note))
     (println @play-sequence)))
 
 (defn bank-changed
   [bank]
-  (when (= bank 2)
-    (buttons-off (range 68 84))
-    (redraw-buttons)))
+  (case bank
+    ;; 0 (buttons-off (range 52 68))
+    1 (buttons-off (range 52 68))
+    2 (buttons-off (range 68 84)))
+  (redraw-buttons))
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
@@ -313,8 +325,7 @@
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
                (when ((get-in buttons [:sequence :sequence]) note)
-                 (add-or-remove-play-phrase
-                  (button->position note))))
+                 (add-or-remove-play-phrase note)))
              ::sequence-play-handler)
 
 (ot/on-event [:midi :note-on]
@@ -336,8 +347,8 @@
 
 (init)
 
-;; (ot/event-debug-on)
 (ot/event-debug-off)
+;; (ot/event-debug-off)
 
 ;; (do
 ;;   (ot/metro-bpm metro bpm)
