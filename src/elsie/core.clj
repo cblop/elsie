@@ -26,6 +26,9 @@
 
 (def bank (atom 0))
 
+(def note-banks (atom {:record 0
+                      :sequence 0}))
+
 (def colour-order
   [:red
    :orange
@@ -72,7 +75,9 @@
      :all all}))
 
 (def buttons
-  {:record (set (range 52 68))})
+  {:record {:sequence (set (range 52 68))
+            :inc-bank 30
+            :dec-bank 27}})
 
 (defn flash-buttons
   [{:keys [notes colour duration]}]
@@ -154,7 +159,13 @@
    (mod note 4)
    (rem note 4)))
 
-(button->position 52)
+(defn inc-note-bank
+  [type]
+  (swap! note-banks #(update % type inc)))
+
+(defn dec-note-bank
+  [type]
+  (swap! note-banks #(update % type inc)))
 
 (defn add-record-phrase
   [note]
@@ -176,10 +187,17 @@
                  (when (notes note) (command))))
              ::playback-handler)
 
+(ot/on-event [:midi :note-on]
+             (fn [{:keys [note]}]
+               (cond
+                 (= note (get-in buttons [:record :inc-bank])) (inc-note-bank :record)
+                 (= note (get-in buttons [:record :dec-bank])) (dec-note-bank :record)))
+             ::record-note-bank-handler)
 
 (ot/on-event [:midi :note-on]
              (fn [{:keys [note]}]
-               (when ((:record buttons) note) (add-record-phrase (button->position note))))
+               (when ((get-in buttons [:record :sequence]) note) (add-record-phrase
+                                                                  (+ (button->position note) (* (:record @note-banks) 16)))))
              ::sequence-record-handler)
 
 (ot/on-event [:midi :note-on]
