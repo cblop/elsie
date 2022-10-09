@@ -128,7 +128,7 @@
                                   [])
                          :colour :green
                          :duration pulse}))
-  (ot/apply-at (metro (inc beat)) #'light-clock (inc beat) []))
+  (ot/apply-by (metro (inc beat)) #'light-clock (inc beat) []))
 
 
 (defn change-bank
@@ -239,16 +239,12 @@
 
 (defn record-buffer
   [buffer bus]
+  (prn "RECORD")
   (record :buf buffer :bus bus))
-
-
-(ot/defsynth play-1 [buf default-buffer
-                     bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus [(* (ot/play-buf:ar 1 buf :action ot/FREE) env) (* (ot/play-buf:ar 1 buf :action ot/FREE) env)])))
 
 (defn play-buffers
   [bufs]
+  (prn "PLAY")
   (let [buffers (remove nil? bufs)]
     (case (count buffers)
       1 (player-1 (nth buffers 0))
@@ -267,18 +263,26 @@
                         (vec
                          (for [b (nth buses i)]
                            {:start s
+                            :finish f
                             :buffer (ot/buffer (samples (- f s)))
                             :bus b})))
                       records)]
     (doseq [b buffers]
       (doseq [{:keys [start buffer bus]} b]
-        (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'record-buffer [buffer bus])))
+        (ot/apply-by (ot/metro-bar metro (+ start-delay start)) #'record-buffer [buffer bus])))
     (doseq [[start finish buf-num] plays]
-      (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'play-buffers [[(get-in buffers [buf-num 0 :buffer])
-                                                                               (get-in buffers [buf-num 1 :buffer])
-                                                                               (get-in buffers [buf-num 2 :buffer])
-                                                                               (get-in buffers [buf-num 3 :buffer])
-                                                                               (get-in buffers [buf-num 4 :buffer])]]))))
+      (let [repeats (quot finish start)
+            length (let [b (get-in buffers [buf-num 0])]
+                     (inc (- (:finish b) (:start b))))
+            starts #p (map (partial * length) (range repeats))]
+        (doseq [st starts]
+          (ot/apply-by (ot/metro-bar metro (+ start-delay st)) #'play-buffers [[(get-in buffers [buf-num 0 :buffer])
+                                                                                (get-in buffers [buf-num 1 :buffer])
+                                                                                (get-in buffers [buf-num 2 :buffer])
+                                                                                (get-in buffers [buf-num 3 :buffer])
+                                                                                (get-in buffers [buf-num 4 :buffer])]]))))))
+
+(init)
 
 (defn reset-insts
   []
@@ -450,7 +454,7 @@
   (buttons-off (range 52 68))
   (doseq [i (range (count bus-list))]
     (buttons-on {:notes #{(position->button (+ i (* (get @note-banks (nth banks @bank)) 16)))}
-                 :colour (nth colour-order (mod (dec (count @record-sequence)) (count colour-order)))})))
+                 :colour (nth colour-order (mod i (count colour-order))) #_(nth colour-order (mod (dec (count @record-sequence)) (count colour-order)))})))
 
 (defn add-or-remove-record-phrase
   [note]
