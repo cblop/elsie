@@ -3,6 +3,8 @@
    [overtone.live :as ot]
    [overtone.midi :as midi]))
 
+(def SRATE (:sample-rate (ot/server-info)))
+
 (def record-sequence
   (atom [[]]))
 
@@ -35,6 +37,15 @@
 
 (def note-banks (atom {:record 0
                        :sequence 0}))
+
+(def default-buffer (ot/buffer 48000))
+(defonce vox-bus (ot/audio-bus))
+(defonce guitar-bus (ot/audio-bus))
+(defonce kick-bus (ot/audio-bus))
+(defonce drum-bus (ot/audio-bus))
+(defonce crash-bus (ot/audio-bus))
+
+(def bus-list [[vox-bus] [guitar-bus] [kick-bus drum-bus crash-bus]])
 
 (def colour-order
   [:purple
@@ -96,7 +107,7 @@
 
 (defn buttons-on
   [{:keys [notes colour]}]
-  (doseq [note #p notes]
+  (doseq [note notes]
     (midi/midi-note-on mf-out (cond-> note
                                 (keyword? note) (ot/note)) (get colours colour) 2)))
 
@@ -117,7 +128,7 @@
                                   [])
                          :colour :green
                          :duration pulse}))
-  (ot/apply-by (metro (inc beat)) #'light-clock (inc beat) []))
+  (ot/apply-at (metro (inc beat)) #'light-clock (inc beat) []))
 
 
 (defn change-bank
@@ -126,16 +137,168 @@
     (reset! bank 0)
     (midi/midi-note-on mf-out (ot/note (nth bank-numbers bank-number)) 127 3)))
 
+(defn samples
+  [bars]
+  (let [[num _] @time-signature
+        secs-per-bar (* num (/ bpm 60.))
+        samples-per-bar (* SRATE secs-per-bar)]
+    (* bars samples-per-bar)))
+
+(ot/defsynth vox []
+  (ot/out vox-bus (ot/sound-in 0)))
+
+(ot/defsynth guitar []
+  (ot/out guitar-bus (ot/sound-in 1)))
+
+(ot/defsynth kick []
+  (ot/out kick-bus (ot/sound-in 2)))
+
+(ot/defsynth drum []
+  (ot/out drum-bus (ot/sound-in 3)))
+
+(ot/defsynth crash []
+  (ot/out crash-bus (ot/sound-in 4)))
+
+(ot/defsynth record [buf default-buffer bus drum-bus]
+  (let [signal (ot/in:ar bus)]
+    (ot/record-buf:ar [signal] buf :loop false)))
+
+(ot/defsynth player [buf0 default-buffer
+                     buf1 default-buffer
+                     buf2 default-buffer
+                     buf3 default-buffer
+                     buf4 default-buffer
+                     bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
+                                    (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
+                                    (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
+                                    (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env)
+                                    (* (ot/play-buf:ar 1 buf4 :action ot/FREE) env))))))
+
+;; (def drum-1 (ot/buffer (samples 4)))
+
+;; (def buses
+;;   {:vox (ot/buffer (samples 8))
+;;    :guitar (ot/buffer (samples 8))
+;;    :kick (ot/buffer (samples 8))
+;;    :drum (ot/buffer (samples 8))
+;;    :crash (ot/buffer (samples 8))})
+
+
+;; (doseq [buf (vals buses)]
+;;   (record :buf buf))
+
+;; (:drum buses)
+;; (play-1 :buf (:vox buses))
+
+;; (do
+;;   (record :buf (:vox buses) :bus vox-bus)
+;;   (record :buf (:guitar buses) :bus guitar-bus)
+;;   (record :buf (:kick buses) :bus kick-bus)
+;;   (record :buf (:drum buses) :bus drum-bus)
+;;   (record :buf (:crash buses) :bus crash-bus))
+
+;; (let [{:keys [vox guitar kick drum crash]} buses]
+;;   (player :buf0 vox :buf1 guitar :buf2 kick :buf3 drum :buf4 crash))
+
+;; (def play-buffers (atom []))
+
+(defn record-buffer
+  [buffer bus]
+  (prn "RECORD")
+  #p buffer
+  #p bus
+  (record :buf buffer :bus bus))
+
+
+(ot/defsynth play-1 [buf default-buffer
+                     bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus [(* (ot/play-buf:ar 1 buf :action ot/FREE) env) (* (ot/play-buf:ar 1 buf :action ot/FREE) env)])))
+
+(defn play-buffers
+  [buf0 buf1 buf2 buf3 buf4]
+  (prn "PLAY")
+  #p buf0
+  (play-1 :buf buf0))
+
+;; (def buffer-atom (atom []))
+
+(defn schedule
+  []
+  (let [start-delay 4
+        buses [[vox-bus] [guitar-bus] [kick-bus drum-bus crash-bus]]
+        records @record-sequence
+        plays @play-sequence
+        buffers (mapv (fn [[s f i]]
+                        (vec
+                         (for [b (nth buses i)]
+                           {:start s
+                            :buffer (ot/buffer (samples (- f s)))
+                            :bus b})))
+                      records)]
+    ;; (reset! buffer-atom buffers)
+    (doseq [b buffers]
+      (doseq [{:keys [start buffer bus]} b]
+        ;; (ot/apply-at (ot/metro-bar metro #p (+ start-delay start)) #'println ["RECORDING"])
+        (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'record-buffer [buffer bus])))
+    (doseq [[start finish buf-num] plays]
+      #_(ot/apply-at (ot/metro-bar metro #p (+ start-delay start)) #'println ["PLAYING"])
+      (prn "BUF NUM" buf-num)
+      #p (get-in buffers [buf-num 0])
+      (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'play-buffers [(or (get-in buffers [buf-num 0 :buffer]) default-buffer)
+                                                                             (or (get-in buffers [buf-num 1 :buffer]) default-buffer)
+                                                                             (or (get-in buffers [buf-num 2 :buffer]) default-buffer)
+                                                                             (or (get-in buffers [buf-num 3 :buffer]) default-buffer)
+                                                                             (or (get-in buffers [buf-num 4 :buffer]) default-buffer)]))))
+
+;; (get-in @buffer-atom [0 0])
+
+;; (play-1 :buf (get-in @buffer-atom [0 0 :buffer]))
+
+;; (ot/metro-bar metro)
+
+;; (do
+;;   (play)
+;;   (schedule)
+;;   )
+
+;; (prn @play-buffers)
+
+;; (init)
+
+;; (prn @play-sequence)
+
+;; (record :buf drum-1 :bus drum-bus)
+;; (player :buf drum-1)
+;; (ot/stop)
+
+
+(defn reset-insts
+  []
+  (vox)
+  (guitar)
+  (kick)
+  (drum)
+  (crash))
+
 (defn play
   []
+  (reset-insts)
   (change-bank 0)
   (ot/metro-bpm metro bpm)
+  (ot/metro-bpb metro (first @time-signature))
+  (ot/metro-bar-start metro 0)
   (ot/metro-start metro 0)
   (buttons-off (range 0 128))
+  (schedule)
   (light-clock (metro)))
+
 
 (defn stop
   []
+
   (ot/stop))
 
 ;; TODO remove?
@@ -220,9 +383,7 @@
         index-seq (map #(-> (apply list %1)
                                 (conj %2)) current-sequence (range (count current-sequence)))
         shortened-sequence (filter (fn [[_ s f _]]
-                                        (and
-                                         s
-                                         f
+                                        (and s f
                                          (< s end-n)
                                              (>= f start-n)))
                                    index-seq)]
@@ -282,7 +443,7 @@
 (defn mic-selection
   []
   (buttons-off (range 52 68))
-  (doseq [i (range 8)]
+  (doseq [i (range (count bus-list))]
     (buttons-on {:notes #{(position->button (+ i (* (get @note-banks (nth banks @bank)) 16)))}
                  :colour (nth colour-order (mod (dec (count @record-sequence)) (count colour-order)))})))
 
@@ -301,14 +462,6 @@
                          (append-or-delete-phrase transposed-note)
                          (mic-selection))
       :else (append-or-delete-phrase transposed-note))
-    #_(if
-        (>= last-count 2) (swap! record-sequence conj [note])
-        (do
-          (append-or-delete-phrase note)
-          (let [new-sequence @record-sequence
-                [start finish] (last new-sequence)]
-              (buttons-on {:notes (map position->button (range start (inc finish)))
-                           :colour (nth colour-order (mod (dec (count new-sequence)) (count colour-order)))}))))
     (println @record-sequence)))
 
 (defn add-or-remove-play-phrase
@@ -375,10 +528,14 @@
              ::bank-change-handler)
 
 (defn init []
+
   (ot/stop)
+
+  (reset-insts)
   (buttons-off (range 0 128))
   (change-bank 0)
   (reset! record-sequence [[]])
+  (reset! play-sequence [[]])
   (reset! note-banks {:record 0
                       :sequence 0})
   (ot/metro-bpm metro bpm)
