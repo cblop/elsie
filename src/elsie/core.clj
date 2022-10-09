@@ -204,12 +204,16 @@
         sequence (case seq-key
                    :record record-sequence
                    :sequence play-sequence)
-        current-sequence @sequence]
-    (case seq-key
-      :record (buttons-off (range 52 68))
-      :sequence (buttons-off (range 68 84)))
+        current-sequence #p @sequence
+        start-n (- (get start-buttons seq-key) 12)
+        end-n (+ start-n 16)
+        shortened-sequence (filter (fn [[s f _]]
+                                     (and (< (position->button s) end-n)
+                                          (>= (position->button f) start-n)))
+                                   current-sequence)]
+    (buttons-off (range start-n end-n))
     (doseq [index-seq (map #(-> (apply list %1)
-                                (conj %2)) current-sequence (range (count current-sequence)))]
+                                (conj %2)) shortened-sequence (range (count shortened-sequence)))]
       (let [i (first index-seq)
             seq-type? (= seq-key :sequence)
             start (nth index-seq 1)
