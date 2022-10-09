@@ -163,18 +163,51 @@
   (let [signal (ot/in:ar bus)]
     (ot/record-buf:ar [signal] buf :loop false)))
 
-(ot/defsynth player [buf0 default-buffer
-                     buf1 default-buffer
-                     buf2 default-buffer
-                     buf3 default-buffer
-                     buf4 default-buffer
-                     bus 0]
+
+(ot/defsynth player-1 [buf0 default-buffer
+                       bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus (* [0.5 0.5] (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)))))
+
+(ot/defsynth player-2 [buf0 default-buffer
+                       buf1 default-buffer
+                       bus 0]
   (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
     (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
-                                    (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
-                                    (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
-                                    (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env)
-                                    (* (ot/play-buf:ar 1 buf4 :action ot/FREE) env))))))
+                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env))))))
+
+(ot/defsynth player-3 [buf0 default-buffer
+                       buf1 default-buffer
+                       buf2 default-buffer
+                       bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env))))))
+
+(ot/defsynth player-4 [buf0 default-buffer
+                       buf1 default-buffer
+                       buf2 default-buffer
+                       buf3 default-buffer
+                       bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env))))))
+
+(ot/defsynth player-5 [buf0 default-buffer
+                       buf1 default-buffer
+                       buf2 default-buffer
+                       buf3 default-buffer
+                       buf4 default-buffer
+                       bus 0]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
+    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env)
+                                (* (ot/play-buf:ar 1 buf4 :action ot/FREE) env))))))
 
 ;; (def drum-1 (ot/buffer (samples 4)))
 
@@ -206,9 +239,6 @@
 
 (defn record-buffer
   [buffer bus]
-  (prn "RECORD")
-  #p buffer
-  #p bus
   (record :buf buffer :bus bus))
 
 
@@ -218,12 +248,14 @@
     (ot/out bus [(* (ot/play-buf:ar 1 buf :action ot/FREE) env) (* (ot/play-buf:ar 1 buf :action ot/FREE) env)])))
 
 (defn play-buffers
-  [buf0 buf1 buf2 buf3 buf4]
-  (prn "PLAY")
-  #p buf0
-  (play-1 :buf buf0))
-
-;; (def buffer-atom (atom []))
+  [bufs]
+  (let [buffers (remove nil? bufs)]
+    (case (count buffers)
+      1 (player-1 (nth buffers 0))
+      2 (player-2 (nth buffers 0) (nth buffers 1))
+      3 (player-3 (nth buffers 0) (nth buffers 1) (nth buffers 2))
+      4 (player-4 (nth buffers 0) (nth buffers 1) (nth buffers 2) (nth buffers 3))
+      5 (player-5 (nth buffers 0) (nth buffers 1) (nth buffers 2) (nth buffers 3) (nth buffers 4)))))
 
 (defn schedule
   []
@@ -238,42 +270,15 @@
                             :buffer (ot/buffer (samples (- f s)))
                             :bus b})))
                       records)]
-    ;; (reset! buffer-atom buffers)
     (doseq [b buffers]
       (doseq [{:keys [start buffer bus]} b]
-        ;; (ot/apply-at (ot/metro-bar metro #p (+ start-delay start)) #'println ["RECORDING"])
         (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'record-buffer [buffer bus])))
     (doseq [[start finish buf-num] plays]
-      #_(ot/apply-at (ot/metro-bar metro #p (+ start-delay start)) #'println ["PLAYING"])
-      (prn "BUF NUM" buf-num)
-      #p (get-in buffers [buf-num 0])
-      (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'play-buffers [(or (get-in buffers [buf-num 0 :buffer]) default-buffer)
-                                                                             (or (get-in buffers [buf-num 1 :buffer]) default-buffer)
-                                                                             (or (get-in buffers [buf-num 2 :buffer]) default-buffer)
-                                                                             (or (get-in buffers [buf-num 3 :buffer]) default-buffer)
-                                                                             (or (get-in buffers [buf-num 4 :buffer]) default-buffer)]))))
-
-;; (get-in @buffer-atom [0 0])
-
-;; (play-1 :buf (get-in @buffer-atom [0 0 :buffer]))
-
-;; (ot/metro-bar metro)
-
-;; (do
-;;   (play)
-;;   (schedule)
-;;   )
-
-;; (prn @play-buffers)
-
-;; (init)
-
-;; (prn @play-sequence)
-
-;; (record :buf drum-1 :bus drum-bus)
-;; (player :buf drum-1)
-;; (ot/stop)
-
+      (ot/apply-at (ot/metro-bar metro (+ start-delay start)) #'play-buffers [[(get-in buffers [buf-num 0 :buffer])
+                                                                               (get-in buffers [buf-num 1 :buffer])
+                                                                               (get-in buffers [buf-num 2 :buffer])
+                                                                               (get-in buffers [buf-num 3 :buffer])
+                                                                               (get-in buffers [buf-num 4 :buffer])]]))))
 
 (defn reset-insts
   []
