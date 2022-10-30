@@ -4,6 +4,7 @@
    [overtone.midi :as midi]))
 
 (def SRATE (:sample-rate (ot/server-info)))
+(def SDUR (:sample-dur (ot/server-info)))
 
 (def record-sequence
   (atom [[]]))
@@ -140,7 +141,7 @@
 (defn samples
   [bars]
   (let [[num _] @time-signature
-        secs-per-bar (* num (/ bpm 60.))
+        secs-per-bar (* num (/ 60. bpm))
         samples-per-bar (* SRATE secs-per-bar)]
     (* bars samples-per-bar)))
 
@@ -163,79 +164,9 @@
   (let [signal (ot/in:ar bus)]
     (ot/record-buf:ar [signal] buf :loop false)))
 
-
-(ot/defsynth player-1 [buf0 default-buffer
-                       bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus (* [0.5 0.5] (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)))))
-
-(ot/defsynth player-2 [buf0 default-buffer
-                       buf1 default-buffer
-                       bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env))))))
-
-(ot/defsynth player-3 [buf0 default-buffer
-                       buf1 default-buffer
-                       buf2 default-buffer
-                       bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env))))))
-
-(ot/defsynth player-4 [buf0 default-buffer
-                       buf1 default-buffer
-                       buf2 default-buffer
-                       buf3 default-buffer
-                       bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env))))))
-
-(ot/defsynth player-5 [buf0 default-buffer
-                       buf1 default-buffer
-                       buf2 default-buffer
-                       buf3 default-buffer
-                       buf4 default-buffer
-                       bus 0]
-  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/FREE)]
-    (ot/out bus (* [0.5 0.5] (+ (* (ot/play-buf:ar 1 buf0 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf1 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf2 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf3 :action ot/FREE) env)
-                                (* (ot/play-buf:ar 1 buf4 :action ot/FREE) env))))))
-
-;; (def drum-1 (ot/buffer (samples 4)))
-
-;; (def buses
-;;   {:vox (ot/buffer (samples 8))
-;;    :guitar (ot/buffer (samples 8))
-;;    :kick (ot/buffer (samples 8))
-;;    :drum (ot/buffer (samples 8))
-;;    :crash (ot/buffer (samples 8))})
-
-
-;; (doseq [buf (vals buses)]
-;;   (record :buf buf))
-
-;; (:drum buses)
-;; (play-1 :buf (:vox buses))
-
-;; (do
-;;   (record :buf (:vox buses) :bus vox-bus)
-;;   (record :buf (:guitar buses) :bus guitar-bus)
-;;   (record :buf (:kick buses) :bus kick-bus)
-;;   (record :buf (:drum buses) :bus drum-bus)
-;;   (record :buf (:crash buses) :bus crash-bus))
-
-;; (let [{:keys [vox guitar kick drum crash]} buses]
-;;   (player :buf0 vox :buf1 guitar :buf2 kick :buf3 drum :buf4 crash))
-
-;; (def play-buffers (atom []))
+(ot/definst player [buf default-buffer]
+  (let [env (ot/env-gen (ot/asr 0 1 0) :action ot/PAUSE)]
+    (* (ot/play-buf:ar 1 buf :action ot/PAUSE) env)))
 
 (defn record-buffer
   [buffer bus]
@@ -244,14 +175,10 @@
 
 (defn play-buffers
   [bufs]
-  (prn "PLAY")
-  (let [buffers (remove nil? bufs)]
-    (case (count buffers)
-      1 (player-1 (nth buffers 0))
-      2 (player-2 (nth buffers 0) (nth buffers 1))
-      3 (player-3 (nth buffers 0) (nth buffers 1) (nth buffers 2))
-      4 (player-4 (nth buffers 0) (nth buffers 1) (nth buffers 2) (nth buffers 3))
-      5 (player-5 (nth buffers 0) (nth buffers 1) (nth buffers 2) (nth buffers 3) (nth buffers 4)))))
+  (doseq [{:keys [buffer]} bufs]
+    (when-not (nil? buffer)
+      (prn "PLAY" buffer)
+      (player buffer))))
 
 (defn schedule
   []
@@ -264,25 +191,25 @@
                          (for [b (nth buses i)]
                            {:start s
                             :finish f
-                            :buffer (ot/buffer (samples (- f s)))
+                            :buffer (ot/buffer (samples (inc (- f s))))
                             :bus b})))
                       records)]
     (doseq [b buffers]
       (doseq [{:keys [start buffer bus]} b]
         (ot/apply-by (ot/metro-bar metro (+ start-delay start)) #'record-buffer [buffer bus])))
     (doseq [[start finish buf-num] plays]
-      (let [repeats (quot finish start)
-            length (let [b (get-in buffers [buf-num 0])]
+      (let [length #p (let [b #p (get-in buffers [buf-num 0])]
                      (inc (- (:finish b) (:start b))))
-            starts #p (map (partial * length) (range repeats))]
+            repeats #p (quot (inc (- finish start)) length)
+            starts #p (map #(-> %
+                                (* length)
+                                (+ start)) (range repeats))]
         (doseq [st starts]
-          (ot/apply-by (ot/metro-bar metro (+ start-delay st)) #'play-buffers [[(get-in buffers [buf-num 0 :buffer])
-                                                                                (get-in buffers [buf-num 1 :buffer])
-                                                                                (get-in buffers [buf-num 2 :buffer])
-                                                                                (get-in buffers [buf-num 3 :buffer])
-                                                                                (get-in buffers [buf-num 4 :buffer])]]))))))
+          (ot/apply-by (ot/metro-bar metro (+ start-delay st)) #'play-buffers [(nth buffers buf-num)]))))))
 
-(init)
+;; (init)
+
+;; (ot/inst-volume! player 4)
 
 (defn reset-insts
   []
@@ -295,6 +222,7 @@
 (defn play
   []
   (reset-insts)
+  (ot/inst-volume! player 4)
   (change-bank 0)
   (ot/metro-bpm metro bpm)
   (ot/metro-bpb metro (first @time-signature))
