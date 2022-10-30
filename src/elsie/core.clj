@@ -209,7 +209,7 @@
 
 ;; (init)
 
-;; (ot/inst-volume! player 4)
+;; (ot/inst-volume! player 2)
 
 (defn reset-insts
   []
@@ -222,7 +222,7 @@
 (defn play
   []
   (reset-insts)
-  (ot/inst-volume! player 4)
+  (ot/inst-volume! player 2)
   (change-bank 0)
   (ot/metro-bpm metro bpm)
   (ot/metro-bpb metro (first @time-signature))
